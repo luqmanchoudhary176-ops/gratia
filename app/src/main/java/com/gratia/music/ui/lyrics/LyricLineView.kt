@@ -4,9 +4,11 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
@@ -20,8 +22,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.gratia.music.lyrics.LyricLine
 import com.gratia.music.ui.theme.Inter
+import com.gratia.music.lyrics.LyricLine
+import com.gratia.music.lyrics.LyricWord
+import com.gratia.music.lyrics.LyricsTimingEngine
+import kotlin.math.PI
+import kotlin.math.sin
+import kotlin.math.cos
 
 /**
  * Animated letter composable that handles opacity, translationY, and glowing effects.
@@ -149,7 +156,7 @@ fun MusicLine(
 /**
  * Renders a single lyric line.
  * Implements transitions for opacity, scale, and blur.
- * Animates individual words/letters if word synced timestamps are present.
+ * Animates individual words if word synced timestamps are present.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -163,23 +170,23 @@ fun LyricLineView(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
 
-    // Target States
+    // Target States for the line container
     val targetScale = when {
-        isActive -> 1.05f
-        isPast -> 0.96f
-        else -> 0.94f
+        isActive -> 1.075f // midpoint of 1.05-1.10
+        isPast -> 0.95f
+        else -> 0.92f
     }
 
     val targetAlpha = when {
         isActive -> 1.0f
-        isPast -> 0.15f
-        else -> 0.25f
+        isPast -> 0.2f // within 0.15-0.30
+        else -> 0.3f // within 0.25-0.40
     }
 
     val targetBlur = when {
         isActive -> 0.dp
         isPast -> 1.5.dp
-        else -> 2.5.dp
+        else -> 2.dp
     }
 
     // Cubic Bezier Easing
@@ -191,8 +198,6 @@ fun LyricLineView(
     val scale by animateFloatAsState(targetValue = targetScale, animationSpec = scaleSpec, label = "lineScale")
     val alpha by animateFloatAsState(targetValue = targetAlpha, animationSpec = alphaSpec, label = "lineAlpha")
     val blurRadius by animateDpAsState(targetValue = targetBlur, animationSpec = blurSpec, label = "lineBlur")
-
-    val cottonColor = Color(0xFFEDEBDE)
 
     val lineModifier = modifier
         .fillMaxWidth()
@@ -210,6 +215,9 @@ fun LyricLineView(
             onClick = onClick
         )
 
+    // Determine if this line is word-synced (has word-level timestamps)
+    val isWordSynced = line.words.isNotEmpty()
+
     if (line.text.isBlank() || line.text == " ") {
         val currentLineDuration = line.startMs
         val nextLineDuration = line.endMs ?: (line.startMs + 2000L)
@@ -218,42 +226,95 @@ fun LyricLineView(
             durationMs = nextLineDuration - currentLineDuration,
             modifier = lineModifier
         )
-    } else if (isActive && line.words.isNotEmpty()) {
-        FlowRow(
+    } else if (isActive && isWordSynced) {
+        // Word-synced active line: animate words based on their timing
+        val activeWordIndex = LyricsTimingEngine.findActiveWordIndex(line.words, currentTimeMs)
+        Row(
             modifier = lineModifier,
-            horizontalArrangement = Arrangement.Start,
-            verticalArrangement = Arrangement.Center
+            horizontalArrangement = Arrangement.spacedBy(4.dp), // spacing between words
+            verticalAlignment = Alignment.CenterVertically
         ) {
             line.words.forEachIndexed { wordIndex, word ->
-                val wordDuration = if (wordIndex < line.words.size - 1) {
-                    line.words[wordIndex + 1].startMs - word.startMs
-                } else {
-                    (line.endMs ?: (word.startMs + 500L)) - word.startMs
+                // Determine word state
+                val isPastWord = wordIndex < activeWordIndex
+                val isFutureWord = wordIndex > activeWordIndex
+                val isActiveWord = wordIndex == activeWordIndex
+
+                // Calculate word progress for glow effect (only for active word)
+                val wordProgress = if (currentTimeMs < word.startMs) 0f
+                                else if (currentTimeMs > word.endMs) 1f
+                                else (currentTimeMs - word.startMs).toFloat() / (word.endMs - word.startMs)
+                // Glow intensity: peaks at the middle of the word's duration
+                val glowAlpha = (sin(wordProgress * PI.toFloat()) * 0.5f + 0.5f) * 0.4f
+
+                // Word-specific visual properties
+                val wordScale = when {
+                    isPastWord -> 0.98f
+                    isFutureWord -> 0.96f
+                    isActiveWord -> 1.02f // slight pop for active word
+                    else -> 1.0f // default (should not happen)
+                }
+                val wordAlpha = when {
+                    isPastWord -> 0.9f
+                    isFutureWord -> 0.4f
+                    isActiveWord -> 1.0f
+                    else -> 0.5f // default (should not happen)
+                }
+                val wordBlur = when {
+                    isPastWord -> 0.5.dp
+                    isFutureWord -> 1.dp
+                    isActiveWord -> 0.dp
+                    else -> 0.dp // default (should not happen)
                 }
 
-                val letters = word.text.map { it.toString() } + if (wordIndex == line.words.size - 1) emptyList() else listOf(" ")
-                val letterDuration = wordDuration / letters.size.coerceAtLeast(1)
+                // Animate word properties
+                val wordScaleAnim by animateFloatAsState(
+                    targetValue = wordScale,
+                    animationSpec = tween(300)
+                )
+                val wordAlphaAnim by animateFloatAsState(
+                    targetValue = wordAlpha,
+                    animationSpec = tween(300)
+                )
+                val wordBlurAnim by animateDpAsState(
+                    targetValue = wordBlur,
+                    animationSpec = tween(300)
+                )
 
-                Row {
-                    letters.forEachIndexed { letterIndex, letter ->
-                        val letterStartMs = word.startMs + letterIndex * letterDuration
-                        AnimatedLetter(
-                            letter = letter,
-                            startMs = letterStartMs,
-                            durationMs = letterDuration,
-                            currentTimeMs = currentTimeMs
-                        )
-                    }
-                }
+                // Shadow for glow effect on active word
+                val wordShadow = if (isActiveWord) {
+                    Shadow(
+                        color = Color.White.copy(alpha = glowAlpha),
+                        blurRadius = 12f * LocalDensity.current.density
+                    )
+                } else null
+
+                Text(
+                    text = word.text + (if (wordIndex < line.words.size - 1) " " else ""),
+                    fontFamily = Inter,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 28.sp,
+                    color = Color.White,
+                    style = TextStyle(shadow = wordShadow),
+                    modifier = Modifier
+                        .graphicsLayer {
+                            scaleX = wordScaleAnim
+                            scaleY = wordScaleAnim
+                        }
+                        .alpha(wordAlphaAnim)
+                        .blur(wordBlurAnim)
+                )
             }
         }
     } else {
+        // For non-active lines or lines without word timestamps, show whole line
+        val textColor = Color(0xFFEDEBDE) // Cotton/warm white
         Text(
             text = line.text,
             fontFamily = Inter,
             fontWeight = FontWeight.ExtraBold,
             fontSize = 28.sp,
-            color = cottonColor,
+            color = textColor,
             lineHeight = 38.sp,
             modifier = lineModifier.padding(vertical = 4.dp)
         )

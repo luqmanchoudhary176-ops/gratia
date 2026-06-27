@@ -39,10 +39,13 @@ fun KineticLyricsColumn(
             if (viewportHeight > 0) {
                 val activeItem = layoutInfo.visibleItemsInfo.find { it.index == activeIndex }
                 val itemSize = activeItem?.size ?: 120 // Estimated height in pixels
-                val targetOffset = -(viewportHeight / 2 - itemSize / 2)
+                val targetOffset = (viewportHeight - itemSize) / 2
                 listState.animateScrollToItem(activeIndex, targetOffset)
             } else {
-                listState.animateScrollToItem(activeIndex, -220)
+                // Fallback offset: approximate center based on estimated item height
+                val estimatedItemHeight = 120
+                val targetOffset = (viewportHeight - estimatedItemHeight) / 2
+                listState.animateScrollToItem(activeIndex, targetOffset)
             }
         }
     }
